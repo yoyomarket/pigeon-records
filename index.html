@@ -1217,8 +1217,21 @@ function fillNow(type) {
 // ═══ INIT ═══
 renderDashboard();
 </script>
+  const provider = new firebase.auth.GoogleAuthProvider();
 
+  function login() {
+    firebase.auth().signInWithPopup(provider)
+      .then((result) => {
+        const user = result.user;
+        alert("登入成功：" + user.displayName);
+        console.log(user);
+      })
+      .catch((error) => {
+        console.log(error);
+      });
+  }
 
 </script>
 </body>
+  <button onclick="login()">Google 登入</button>
 </html>
