@@ -1217,30 +1217,13 @@ function fillNow(type) {
 // ═══ INIT ═══
 renderDashboard();
 </script>
- <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"></script>
-
-<script>
-  const firebaseConfig = {
-    apiKey: "...",
-    authDomain: "...",
-    projectId: "...",
-    storageBucket: "...",
-    messagingSenderId: "...",
-    appId: "..."
-  };
-
-  firebase.initializeApp(firebaseConfig);
-  const db = firebase.firestore();
-</script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+ <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 
 <script>
   const firebaseConfig = {
-    apiKey: "AIzaSyDgmSZgSBTKN0zg-PrrlD6BrLtF_WoCRuE",
+    apiKey: "AIzaSyDgmSZgSBS...",
     authDomain: "pigeon-records.firebaseapp.com",
     projectId: "pigeon-records",
     storageBucket: "pigeon-records.appspot.com",
@@ -1248,8 +1231,11 @@ renderDashboard();
     appId: "1:553338682859:web:2c87fc48803cb5dafc2dae"
   };
 
-  const app = firebase.initializeApp(firebaseConfig);
+  firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
+
+  console.log("Firebase 初始化成功");
+</script>
 </script>
 </body>
 </html>
