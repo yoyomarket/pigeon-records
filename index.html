@@ -1217,19 +1217,22 @@ function fillNow(type) {
 // ═══ INIT ═══
 renderDashboard();
 </script>
-  const provider = new firebase.auth.GoogleAuthProvider();
+const provider = new firebase.auth.GoogleAuthProvider();
 
-  function login() {
-    firebase.auth().signInWithPopup(provider)
-      .then((result) => {
-        const user = result.user;
-        alert("登入成功：" + user.displayName);
-        console.log(user);
-      })
-      .catch((error) => {
-        console.log(error);
-      });
-  }
+window.login = function () {
+  console.log("login clicked");
+
+  firebase.auth().signInWithPopup(provider)
+    .then((result) => {
+      const user = result.user;
+      alert("登入成功：" + user.displayName);
+      console.log(user);
+    })
+    .catch((error) => {
+      console.log("登入錯誤：", error);
+      alert(error.message);
+    });
+};
 
 </script>
 </body>
