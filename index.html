@@ -32,6 +32,35 @@ cat > /mnt/user-data/outputs/pigeon-log.html << 'HTMLEOF'
     min-height: 100vh;
   }
 
+  /* LOADING OVERLAY */
+  #fb-loading {
+    position: fixed; inset: 0; background: var(--sky-deep);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 999; gap: 16px;
+  }
+  #fb-loading .spin {
+    width: 40px; height: 40px; border: 3px solid var(--border);
+    border-top-color: var(--gold); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  #fb-loading p { color: var(--text-muted); font-size: 13px; font-family: 'Share Tech Mono', monospace; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* SYNC INDICATOR */
+  #sync-indicator {
+    position: fixed; bottom: 16px; right: 16px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 12px;
+    font-size: 11px; font-family: 'Share Tech Mono', monospace;
+    color: var(--text-muted); z-index: 150;
+    display: flex; align-items: center; gap: 6px;
+    transition: all 0.3s; opacity: 0; pointer-events: none;
+  }
+  #sync-indicator.show { opacity: 1; }
+  #sync-indicator .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+  #sync-indicator.syncing .dot { background: var(--gold); animation: pulse 0.8s infinite; }
+  #sync-indicator.error .dot { background: var(--red); }
+
   header {
     background: linear-gradient(135deg, #0A1628 0%, #0F2044 100%);
     border-bottom: 1px solid var(--border);
@@ -217,6 +246,18 @@ cat > /mnt/user-data/outputs/pigeon-log.html << 'HTMLEOF'
 </head>
 <body>
 
+<!-- Firebase Loading -->
+<div id="fb-loading">
+  <div class="spin"></div>
+  <p>連接 Firebase 資料庫...</p>
+</div>
+
+<!-- Sync Indicator -->
+<div id="sync-indicator">
+  <div class="dot"></div>
+  <span id="sync-text">已同步</span>
+</div>
+
 <header>
   <div class="logo-icon">🕊️</div>
   <div>
@@ -364,7 +405,28 @@ cat > /mnt/user-data/outputs/pigeon-log.html << 'HTMLEOF'
   </div>
 </div>
 
+<!-- Firebase SDK (compat version for simplicity) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
+
 <script>
+// ─── Firebase 初始化 ────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyDgmSZgSBTKN0zg-PrrlD6BrLtF_WoCRuE",
+  authDomain: "pigeon-recoeds.firebaseapp.com",
+  projectId: "pigeon-recoeds",
+  storageBucket: "pigeon-recoeds.firebasestorage.app",
+  messagingSenderId: "553338682859",
+  appId: "1:553338682859:web:2c87fc48803cb5dafc2dae",
+  measurementId: "G-9P8VRCZ6CV"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const analytics = firebase.analytics();
+
+// ─── 資料狀態 ────────────────────────────────────────────────────
 const PIGEONS = [
   { ring: '91', fullRing: '24-91', color: '#F5C842' },
   { ring: '95', fullRing: '24-95', color: '#2ECC71' },
@@ -373,14 +435,67 @@ const PIGEONS = [
   { ring: '10', fullRing: '24-10', color: '#9B59B6' },
 ];
 
-let releases = JSON.parse(localStorage.getItem('releases') || '[]');
-let returns  = JSON.parse(localStorage.getItem('returns') || '[]');
+let releases = [];
+let returns  = [];
+let dbReady  = false;
 
-function save() {
-  localStorage.setItem('releases', JSON.stringify(releases));
-  localStorage.setItem('returns',  JSON.stringify(returns));
+// ─── Sync UI ────────────────────────────────────────────────────
+function showSync(state, text) {
+  const el = document.getElementById('sync-indicator');
+  el.className = 'show' + (state ? ' ' + state : '');
+  document.getElementById('sync-text').textContent = text;
+  if (state !== 'syncing') {
+    setTimeout(() => { el.classList.remove('show'); }, 2500);
+  }
 }
 
+// ─── Firebase 讀取 ───────────────────────────────────────────────
+async function loadFromFirebase() {
+  try {
+    const [relSnap, retSnap] = await Promise.all([
+      db.collection('releases').orderBy('datetime').get(),
+      db.collection('returns').orderBy('datetime').get()
+    ]);
+    releases = relSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    returns  = retSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    dbReady = true;
+    document.getElementById('fb-loading').style.display = 'none';
+    renderDashboard();
+    showSync('', '資料已載入');
+  } catch (err) {
+    console.error('Firebase 載入失敗:', err);
+    document.getElementById('fb-loading').innerHTML =
+      `<div style="color:var(--red);font-family:'Share Tech Mono',monospace;font-size:13px;text-align:center;padding:20px">
+        ⚠️ 連線失敗<br><small style="color:var(--text-muted)">${err.message}</small><br><br>
+        <button onclick="location.reload()" style="background:var(--gold);color:var(--sky-deep);border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">重新載入</button>
+      </div>`;
+  }
+}
+
+// ─── Firebase 寫入輔助 ───────────────────────────────────────────
+async function fbSet(collection, id, data) {
+  showSync('syncing', '同步中...');
+  try {
+    await db.collection(collection).doc(id).set(data);
+    showSync('', '已同步 ☁️');
+  } catch (err) {
+    showSync('error', '同步失敗 ⚠️');
+    throw err;
+  }
+}
+
+async function fbDelete(collection, id) {
+  showSync('syncing', '刪除中...');
+  try {
+    await db.collection(collection).doc(id).delete();
+    showSync('', '已同步 ☁️');
+  } catch (err) {
+    showSync('error', '刪除失敗 ⚠️');
+    throw err;
+  }
+}
+
+// ─── 時鐘 ────────────────────────────────────────────────────────
 function updateClock() {
   const now = new Date();
   document.getElementById('clock').textContent = now.toLocaleTimeString('zh-TW', { hour12: false });
@@ -390,6 +505,7 @@ function updateClock() {
 setInterval(updateClock, 1000);
 updateClock();
 
+// ─── 分頁切換 ────────────────────────────────────────────────────
 function switchTab(tab) {
   document.querySelectorAll('.tab').forEach((t, i) => {
     t.classList.toggle('active', ['dashboard','release','return','history'][i] === tab);
@@ -402,8 +518,9 @@ function switchTab(tab) {
   if (tab === 'history')   renderHistory();
 }
 
+// ─── 資料輔助函式 ────────────────────────────────────────────────
 function getPigeonStatus(ring) {
-  const released = releases.filter(r => r.pigeons.includes(ring));
+  const released = releases.filter(r => r.pigeons && r.pigeons.includes(ring));
   if (released.length === 0) return 'ready';
   const lastRelease = released[released.length - 1];
   const ret = returns.find(r => r.ring === ring && r.releaseId === lastRelease.id);
@@ -416,7 +533,7 @@ function getStatusText(s) {
 }
 
 function getLastFlight(ring) {
-  const rels = releases.filter(r => r.pigeons.includes(ring));
+  const rels = releases.filter(r => r.pigeons && r.pigeons.includes(ring));
   return rels.length ? rels[rels.length - 1] : null;
 }
 
@@ -440,6 +557,7 @@ function calcSpeed(distKm, releaseTime, returnTime) {
   return Math.round(speed) + ' m/分';
 }
 
+// ─── 總覽 ────────────────────────────────────────────────────────
 function renderDashboard() {
   const statuses = PIGEONS.map(p => getPigeonStatus(p.ring));
   document.getElementById('stat-flying').textContent = statuses.filter(s => s === 'flying').length;
@@ -493,6 +611,7 @@ function renderDashboard() {
   }).join('');
 }
 
+// ─── 放鴿記錄頁 ─────────────────────────────────────────────────
 function renderReleasePage() {
   const container = document.getElementById('release-pigeon-checks');
   container.innerHTML = PIGEONS.map(p => `
@@ -510,12 +629,12 @@ function renderReleasePage() {
     <div class="history-item">
       <div class="history-icon">🚀</div>
       <div class="history-content">
-        <h4>${r.location} <span style="font-size:11px;color:var(--text-muted)">（${r.pigeons.length} 隻）</span></h4>
+        <h4>${r.location} <span style="font-size:11px;color:var(--text-muted)">（${r.pigeons ? r.pigeons.length : 0} 隻）</span></h4>
         <div class="history-meta" style="margin-top:6px">
           <span>📅 <b>${r.date}</b></span>
           <span>⏰ <b>${r.time}</b></span>
           ${r.distance ? `<span>📏 <b>${r.distance} km</b></span>` : ''}
-          <span>🕊️ <b>${r.pigeons.join(' · ')}</b></span>
+          <span>🕊️ <b>${r.pigeons ? r.pigeons.join(' · ') : ''}</b></span>
         </div>
         ${r.note ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">📝 ${r.note}</div>` : ''}
       </div>
@@ -532,7 +651,7 @@ function getCheckedPigeons() {
   return PIGEONS.map(p => p.ring).filter(r => document.getElementById('check-' + r)?.classList.contains('checked'));
 }
 
-function addRelease() {
+async function addRelease() {
   const loc  = document.getElementById('release-location').value.trim();
   const date = document.getElementById('release-date').value;
   const time = document.getElementById('release-time').value;
@@ -541,38 +660,53 @@ function addRelease() {
   const pigeons = getCheckedPigeons();
 
   if (!loc || !date || !time) { alert('請填入放鴿地點、日期、時間'); return; }
-  if (pigeons.length === 0) { alert('請選擇至少一隻鴿子'); return; }
+  if (pigeons.length === 0)    { alert('請選擇至少一隻鴿子'); return; }
 
-  const r = {
-    id: Date.now().toString(),
+  const id = Date.now().toString();
+  const data = {
     location: loc,
     date, time,
     datetime: date + 'T' + time,
     distance: dist ? Number(dist) : null,
-    note,
-    pigeons
+    note: note || '',
+    pigeons,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  releases.push(r);
-  save();
-  renderReleasePage();
-  renderDashboard();
 
-  ['release-location','release-distance','release-note'].forEach(id => document.getElementById(id).value = '');
-  document.querySelectorAll('.pigeon-check').forEach(el => el.classList.remove('checked'));
-  alert(`✅ 已記錄放鴿！\n地點：${loc}\n鴿子：${pigeons.join(', ')}`);
+  try {
+    await fbSet('releases', id, data);
+    releases.push({ id, ...data });
+    renderReleasePage();
+    renderDashboard();
+    ['release-location','release-distance','release-note'].forEach(i => document.getElementById(i).value = '');
+    document.querySelectorAll('.pigeon-check').forEach(el => el.classList.remove('checked'));
+    alert(`✅ 已記錄放鴿！\n地點：${loc}\n鴿子：${pigeons.join(', ')}`);
+  } catch (err) {
+    alert('❌ 儲存失敗：' + err.message);
+  }
 }
 
-function deleteRelease(btn) {
+async function deleteRelease(btn) {
   const id = btn.dataset.id;
   if (!id) return;
   if (!confirm('確定刪除此放鴿記錄？相關歸巢紀錄也會一併刪除。')) return;
-  releases = releases.filter(r => r.id !== id);
-  returns  = returns.filter(r => r.releaseId !== id);
-  save();
-  renderReleasePage();
-  renderDashboard();
+
+  try {
+    // 刪除相關歸巢記錄
+    const relatedReturns = returns.filter(r => r.releaseId === id);
+    await Promise.all(relatedReturns.map(r => db.collection('returns').doc(r.id).delete()));
+    await fbDelete('releases', id);
+
+    releases = releases.filter(r => r.id !== id);
+    returns  = returns.filter(r => r.releaseId !== id);
+    renderReleasePage();
+    renderDashboard();
+  } catch (err) {
+    alert('❌ 刪除失敗：' + err.message);
+  }
 }
 
+// ─── 歸巢記錄頁 ─────────────────────────────────────────────────
 function renderReturnPage() {
   const sel = document.getElementById('return-pigeon');
   sel.innerHTML = '<option value="">-- 選擇環號 --</option>' +
@@ -610,7 +744,7 @@ function quickReturn(ring) {
   document.getElementById('page-return').scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function addReturn() {
+async function addReturn() {
   const ring   = document.getElementById('return-pigeon').value;
   const date   = document.getElementById('return-date').value;
   const time   = document.getElementById('return-time').value;
@@ -628,24 +762,31 @@ function addReturn() {
   const ft = calcFlightTime(lastFlight.datetime, date + 'T' + time);
   const sp = calcSpeed(lastFlight.distance, lastFlight.datetime, date + 'T' + time);
 
-  returns.push({
-    id: Date.now().toString(),
+  const id = Date.now().toString();
+  const data = {
     ring, date, time,
     datetime: date + 'T' + time,
     releaseId: lastFlight.id,
-    status, note
-  });
-  save();
-  renderReturnPage();
-  renderDashboard();
+    status,
+    note: note || '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
 
-  document.getElementById('return-pigeon').value = '';
-  document.getElementById('return-note').value = '';
-
-  const msg = status === 'late' ? '⚠️ 遲歸記錄已儲存' : '✅ 正常歸巢！';
-  alert(`${msg}\n環號 ${ring}\n飛行時間：${ft}\n分速：${sp}`);
+  try {
+    await fbSet('returns', id, data);
+    returns.push({ id, ...data });
+    renderReturnPage();
+    renderDashboard();
+    document.getElementById('return-pigeon').value = '';
+    document.getElementById('return-note').value = '';
+    const msg = status === 'late' ? '⚠️ 遲歸記錄已儲存' : '✅ 正常歸巢！';
+    alert(`${msg}\n環號 ${ring}\n飛行時間：${ft}\n分速：${sp}`);
+  } catch (err) {
+    alert('❌ 儲存失敗：' + err.message);
+  }
 }
 
+// ─── 歷史記錄頁 ─────────────────────────────────────────────────
 function getMonthKey(dateStr) {
   return dateStr ? dateStr.slice(0, 7) : '';
 }
@@ -664,7 +805,7 @@ function renderStatsSection() {
   if (!statsEl) return;
 
   const pigeonStats = PIGEONS.map(p => {
-    const myReleases = releases.filter(r => r.pigeons.includes(p.ring));
+    const myReleases = releases.filter(r => r.pigeons && r.pigeons.includes(p.ring));
     const myReturns  = myReleases.map(r => getReturn(p.ring, r.id)).filter(Boolean);
     const lateCount  = myReturns.filter(r => r.status === 'late').length;
     const total      = myReleases.length;
@@ -675,7 +816,7 @@ function renderStatsSection() {
     myReleases.forEach(rel => {
       const ret = getReturn(p.ring, rel.id);
       if (!ret) return;
-      const competitors = rel.pigeons
+      const competitors = (rel.pigeons || [])
         .map(r2 => ({ ring: r2, ret: getReturn(r2, rel.id) }))
         .filter(x => x.ret)
         .sort((a, b) => new Date(a.ret.datetime) - new Date(b.ret.datetime));
@@ -787,7 +928,7 @@ function renderHistory() {
 
   let html = '';
   filtered.forEach(rel => {
-    rel.pigeons.forEach(ring => {
+    (rel.pigeons || []).forEach(ring => {
       const ret = getReturn(ring, rel.id);
       const ft = ret ? calcFlightTime(rel.datetime, ret.datetime) : '--';
       const sp = ret ? calcSpeed(rel.distance, rel.datetime, ret.datetime) : '--';
@@ -796,7 +937,7 @@ function renderHistory() {
 
       let rankTag = '';
       if (ret) {
-        const competitors = rel.pigeons
+        const competitors = (rel.pigeons || [])
           .map(r2 => ({ ring: r2, ret: getReturn(r2, rel.id) }))
           .filter(x => x.ret)
           .sort((a, b) => new Date(a.ret.datetime) - new Date(b.ret.datetime));
@@ -827,10 +968,11 @@ function renderHistory() {
   listEl.innerHTML = html;
 }
 
+// ─── 鴿子詳情 Modal ──────────────────────────────────────────────
 function showPigeonDetail(ring) {
   const p = PIGEONS.find(x => x.ring === ring);
   const status = getPigeonStatus(ring);
-  const flightHistory = releases.filter(r => r.pigeons.includes(ring));
+  const flightHistory = releases.filter(r => r.pigeons && r.pigeons.includes(ring));
 
   document.getElementById('modal-title').textContent = `環號 ${ring} (${p.fullRing})`;
 
@@ -890,7 +1032,8 @@ function fillNow(type) {
   }
 }
 
-renderDashboard();
+// ─── 啟動 ───────────────────────────────────────────────────────
+loadFromFirebase();
 </script>
 </body>
 </html>
